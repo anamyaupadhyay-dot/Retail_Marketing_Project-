@@ -1,0 +1,193 @@
+CREATE DATABASE retail_data;
+-- Load this marketing_campaign file-------------
+
+
+USE  retail_data;
+
+select * from marketing_campaign;
+
+SELECT COUNT(*) AS total_rows
+ FROM marketing_campaign;
+ 
+ SELECT COUNT(*) AS missing_income
+ FROM marketing_campaign 
+ WHERE Income IS NULL;
+ 
+ SELECT ID, Education, Income, Dt_Customer
+ FROM marketing_campaign
+ LIMIT 5;
+ 
+ SET SQL_SAFE_UPDATES = 0;
+ 
+ UPDATE marketing_campaign 
+ SET Income = NULL
+ WHERE Income = 0;
+ 
+ CREATE VIEW customers_clean AS
+SELECT r.*,
+       STR_TO_DATE(Dt_Customer, '%d-%m-%Y')                       AS Enroll_Date,
+       YEAR(STR_TO_DATE(Dt_Customer, '%d-%m-%Y'))                 AS Enroll_Year,
+       DATE_FORMAT(STR_TO_DATE(Dt_Customer, '%d-%m-%Y'), '%Y-%m') AS Enroll_YearMonth,
+       2024 - Year_Birth                                          AS Age_Calc,
+       MntWines + MntFruits + MntMeatProducts + MntFishProducts + MntSweetProducts + MntGoldProds AS Total_Spend,
+       Kidhome + Teenhome                                         AS Kids
+FROM marketing_campaign r;
+
+
+
+
+-- Best target segments
+SELECT Education, Marital_Status,
+       COUNT(*) AS customers,
+       SUM(Response) AS responders,
+       ROUND(100.0 * SUM(Response) / COUNT(*), 1) AS response_rate_pct
+FROM customers_clean
+GROUP BY Education, Marital_Status
+HAVING COUNT(*) >= 30
+ORDER BY response_rate_pct DESC
+LIMIT 5;
+
+
+-- Recency vs response
+SELECT CASE WHEN Recency <= 30 THEN '0-30 days'
+            WHEN Recency <= 60 THEN '31-60 days'
+            ELSE '61-99 days' END AS recency_bucket,
+       COUNT(*) AS customers,
+       ROUND(100.0 * SUM(Response) / COUNT(*), 1) AS response_rate_pct
+FROM customers_clean
+GROUP BY 1
+ORDER BY 1;
+
+
+--  Children at home vs response
+SELECT Kids AS children_at_home,
+       COUNT(*) AS customers,
+       ROUND(100.0 * SUM(Response) / COUNT(*), 1) AS response_rate_pct,
+       ROUND(AVG(Total_Spend), 0) AS avg_spend
+FROM customers_clean
+GROUP BY Kids
+ORDER BY Kids;
+
+
+-- Above-average income vs the rest
+ SELECT CASE WHEN Income > (SELECT AVG(Income) FROM customers_clean)
+            THEN 'Above average income' ELSE 'At or below average' END AS segment,
+       COUNT(*) AS customers,
+       ROUND(100.0 * SUM(Response) / COUNT(*), 1) AS response_rate_pct,
+       ROUND(AVG(Total_Spend), 0) AS avg_spend
+FROM customers_clean
+WHERE Income IS NOT NULL
+GROUP BY 1;
+
+-- Top 3 spenders in each education group-----------
+
+WITH ranked AS (
+    SELECT ID, Education, Total_Spend,
+           RANK() OVER (PARTITION BY Education ORDER BY Total_Spend DESC) AS spend_rank
+    FROM customers_clean
+)
+SELECT *
+FROM ranked
+WHERE spend_rank <= 3
+ORDER BY Education, spend_rank; 
+ 
+ 
+--  Top 10 customers by spend 
+SELECT ID, Education, Marital_Status, Income, Total_Spend, Response
+FROM customers_clean
+ORDER BY Total_Spend DESC, ID
+LIMIT 10;
+
+
+
+-- Campaign effectiveness
+SELECT 'Campaign 1' AS campaign, SUM(AcceptedCmp1) AS accepted FROM customers_clean
+UNION ALL SELECT 'Campaign 2', SUM(AcceptedCmp2) FROM customers_clean
+UNION ALL SELECT 'Campaign 3', SUM(AcceptedCmp3) FROM customers_clean
+UNION ALL SELECT 'Campaign 4', SUM(AcceptedCmp4) FROM customers_clean
+UNION ALL SELECT 'Campaign 5', SUM(AcceptedCmp5) FROM customers_clean
+UNION ALL SELECT 'Last campaign (Response)', SUM(Response) FROM customers_clean;
+
+
+-- Sales channel mix
+SELECT SUM(NumWebPurchases) AS web_purchases,
+       SUM(NumCatalogPurchases) AS catalog_purchases,
+       SUM(NumStorePurchases) AS store_purchases,
+       ROUND(AVG(NumWebVisitsMonth), 1) AS avg_web_visits_per_month
+FROM customers_clean;
+
+-- Spend by product category
+SELECT 'Wines' AS category, SUM(MntWines) AS total_spend, ROUND(AVG(MntWines),1) AS avg_per_customer FROM customers_clean
+UNION ALL SELECT 'Meat',   SUM(MntMeatProducts),  ROUND(AVG(MntMeatProducts),1)  FROM customers_clean
+UNION ALL SELECT 'Gold',   SUM(MntGoldProds),     ROUND(AVG(MntGoldProds),1)     FROM customers_clean
+UNION ALL SELECT 'Fish',   SUM(MntFishProducts),  ROUND(AVG(MntFishProducts),1)  FROM customers_clean
+UNION ALL SELECT 'Sweets', SUM(MntSweetProducts), ROUND(AVG(MntSweetProducts),1) FROM customers_clean
+UNION ALL SELECT 'Fruits', SUM(MntFruits),        ROUND(AVG(MntFruits),1)        FROM customers_clean
+ORDER BY total_spend DESC;
+
+
+-- Income quartiles vs response
+WITH ranked AS (
+    SELECT *, NTILE(4) OVER (ORDER BY Income) AS income_quartile
+    FROM customers_clean
+    WHERE Income IS NOT NULL
+)
+SELECT income_quartile,
+       COUNT(*) AS customers,
+       MIN(Income) AS min_income,
+       MAX(Income) AS max_income,
+       ROUND(100.0 * SUM(Response) / COUNT(*), 1) AS response_rate_pct,
+       ROUND(AVG(Total_Spend), 0) AS avg_spend
+FROM ranked
+GROUP BY income_quartile
+ORDER BY income_quartile;
+
+-- Income outlier check
+SELECT ID, Income, Education, Marital_Status
+FROM customers_clean
+WHERE Income IS NOT NULL
+ORDER BY Income DESC
+LIMIT 5;
+
+-- Customers by age group
+SELECT CASE WHEN Age_Calc < 30 THEN '1. Under 30'
+            WHEN Age_Calc < 40 THEN '2. 30-39'
+            WHEN Age_Calc < 50 THEN '3. 40-49'
+            WHEN Age_Calc < 60 THEN '4. 50-59'
+            WHEN Age_Calc < 70 THEN '5. 60-69'
+            WHEN Age_Calc <= 100 THEN '6. 70-100'
+            ELSE '7. Over 100 (data error)' END AS age_group,
+       COUNT(*) AS customers,
+       ROUND(100.0 * SUM(Response) / COUNT(*), 1) AS response_rate_pct
+FROM customers_clean
+GROUP BY 1
+ORDER BY 1;
+
+-- Average income and web purchases by marital status 
+SELECT Marital_Status,
+       COUNT(*) AS customers,
+       ROUND(AVG(Income), 0) AS avg_income,
+       ROUND(AVG(NumWebPurchases), 2) AS avg_web_purchases
+FROM customers_clean
+GROUP BY Marital_Status
+ORDER BY customers DESC, Marital_Status;
+
+-- Monthly enrollments with running total
+WITH monthly AS (
+    SELECT Enroll_YearMonth AS ym, COUNT(*) AS new_customers
+    FROM customers_clean
+    GROUP BY Enroll_YearMonth
+)
+SELECT ym, new_customers,
+       SUM(new_customers) OVER (ORDER BY ym) AS running_total
+FROM monthly
+ORDER BY ym;
+
+-- Enrollments per year
+SELECT Enroll_Year,
+       COUNT(*) AS enrollments,
+       ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 1) AS pct_of_total
+FROM customers_clean
+GROUP BY Enroll_Year
+ORDER BY Enroll_Year;
+
